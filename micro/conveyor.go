@@ -21,6 +21,9 @@ type microConveyor struct {
 func (b *microConveyor) Subscribe(target string, options ...interface{}) <-chan conveyor.Subscription {
 	sub := &subscription{ch: make(chan conveyor.ReceiveEnvelope), stopCh: make(chan interface{})}
 	sub.parent, sub.err = b.broker.Subscribe(target, sub.handler)
+	// https://groups.google.com/forum/#!topic/golang-nuts/Qq_h0_M51YM
+	// https://stackoverflow.com/questions/53769216/is-it-safe-to-add-to-a-waitgroup-from-multiple-goroutines
+	sub.writersWG.Add(1) // To avoid a strange situation that triggers the race detector
 
 	ch := make(chan conveyor.Subscription, 1)
 	ch <- sub
@@ -56,6 +59,9 @@ func (s *subscription) Unsubscribe() {
 	s.parent.Unsubscribe()
 
 	close(s.stopCh)
+
+	// To avoid a strange situation that triggers the race detector
+	s.writersWG.Done()
 
 	s.writersWG.Wait()
 

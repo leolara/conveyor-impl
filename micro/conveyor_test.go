@@ -61,7 +61,7 @@ func TestMicroMemoryBroker(t *testing.T) {
 	runtime.Gosched()
 
 	select {
-	case _, ok :=<-sub.Receive():
+	case _, ok := <-sub.Receive():
 		if ok {
 			t.Error("shouldn't receive anything")
 		}
@@ -73,7 +73,7 @@ func TestMicroMemoryBroker(t *testing.T) {
 	runtime.Gosched()
 
 	select {
-	case _, ok :=<-sub.Receive():
+	case _, ok := <-sub.Receive():
 		if ok {
 			t.Error("shouldn't receive anything")
 		}
@@ -91,7 +91,7 @@ func TestMicroMemoryBrokerRace(t *testing.T) {
 		pubChanErr := make(chan error)
 		b.Publish("testTopic", pubChan)
 
-		for i:=1; i<n; i++ {
+		for i := 1; i < n; i++ {
 			pubChan <- conveyor.NewSendEnvelop([]byte{24}, pubChanErr)
 			err := <-pubChanErr
 			if err != nil {
@@ -115,7 +115,7 @@ func TestMicroMemoryBrokerRace(t *testing.T) {
 			t.Fatal(sub.Error())
 		}
 
-		for i:=1; i<n; i++ {
+		for i := 1; i < n; i++ {
 			select {
 			case envelope, ok := <-sub.Receive():
 				if !ok {
@@ -132,7 +132,7 @@ func TestMicroMemoryBrokerRace(t *testing.T) {
 
 		sub.Unsubscribe()
 
-		for i:=1; i<n; i++ {
+		for i := 1; i < n; i++ {
 			select {
 			case _, ok := <-sub.Receive():
 				if ok {
@@ -144,18 +144,20 @@ func TestMicroMemoryBrokerRace(t *testing.T) {
 		}
 	}
 
-	for i:=1; i<100; i++ {
+	for i := 1; i < 100; i++ {
 		mb := memory.NewBroker()
 		mb.Connect()
 		b := NewBrokerFromMicroBroker(mb)
 
 		var wg sync.WaitGroup
+		wg.Add(1)
 		go consumer(b, 10, &wg)
 		go consumer(b, 20, &wg)
 
 		go producer(b, 10, &wg)
 		go producer(b, 30, &wg)
 		go producer(b, 30, &wg)
+		wg.Done()
 		wg.Wait()
 	}
 }
