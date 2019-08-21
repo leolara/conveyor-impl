@@ -1,9 +1,9 @@
 package micro
 
 import (
+	"sync"
+
 	"github.com/micro/go-micro/broker"
-	"runtime"
-	"sync/atomic"
 
 	"github.com/leolara/conveyor"
 )
@@ -19,7 +19,7 @@ type microConveyor struct {
 }
 
 func (b *microConveyor) Subscribe(target string, options ...interface{}) <-chan conveyor.Subscription {
-	sub := &subscription{ch: make(chan conveyor.ReceiveEnvelope)}
+	sub := &subscription{ch: make(chan conveyor.ReceiveEnvelope), stopCh: make(chan interface{})}
 	sub.parent, sub.err = b.broker.Subscribe(target, sub.handler)
 
 	ch := make(chan conveyor.Subscription, 1)
@@ -33,7 +33,7 @@ func (b *microConveyor) Publish(target string, msgs <-chan conveyor.SendEnvelop,
 		for msg := range msgs {
 			bmsg := broker.Message{Body: msg.Body()}
 			b.broker.Publish(target, &bmsg)
-			go func () {msg.Error() <- nil}()
+			go func() { msg.Error() <- nil }()
 		}
 	}()
 }
@@ -43,8 +43,9 @@ type subscription struct {
 
 	ch chan conveyor.ReceiveEnvelope
 
-	err error
-	closing uint32
+	err       error
+	stopCh    chan interface{}
+	writersWG sync.WaitGroup
 }
 
 func (s *subscription) Receive() <-chan conveyor.ReceiveEnvelope {
@@ -54,18 +55,11 @@ func (s *subscription) Receive() <-chan conveyor.ReceiveEnvelope {
 func (s *subscription) Unsubscribe() {
 	s.parent.Unsubscribe()
 
-	atomic.StoreUint32(&s.closing, 1)
-	runtime.Gosched()
+	close(s.stopCh)
 
-	for {
-		select {
-		case <-s.ch:
-			continue
-		default:
-			close(s.ch)
-			return
-		}
-	}
+	s.writersWG.Wait()
+
+	close(s.ch)
 }
 
 func (s *subscription) Error() error {
@@ -73,18 +67,27 @@ func (s *subscription) Error() error {
 }
 
 func (s *subscription) handler(pub broker.Publication) error {
-	if atomic.LoadUint32(&s.closing) != 0 {
+	select {
+	case <-s.stopCh:
 		return nil
+	default:
 	}
+
+	s.writersWG.Add(1)
 
 	ack := make(chan interface{})
 	msg := conveyor.NewReceiveEnvelopCopy(pub.Message().Body, ack)
 
 	go func() {
-		s.ch <- msg
-		<-ack
-		close(ack)
-		pub.Ack()
+		select {
+		case <-s.stopCh:
+			s.writersWG.Done()
+		case s.ch <- msg:
+			s.writersWG.Done()
+			<-ack
+			close(ack)
+			pub.Ack()
+		}
 	}()
 
 	return nil
