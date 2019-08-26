@@ -85,13 +85,12 @@ func TestMicroMemoryBroker(t *testing.T) {
 func TestMicroMemoryBrokerRace(t *testing.T) {
 	producer := func(b conveyor.Broker, n int, wg *sync.WaitGroup) {
 		defer wg.Done()
-		wg.Add(1)
 
 		pubChan := make(chan conveyor.SendEnvelop)
 		pubChanErr := make(chan error)
 		b.Publish("testTopic", pubChan)
 
-		for i := 1; i < n; i++ {
+		for i := 0; i < n; i++ {
 			pubChan <- conveyor.NewSendEnvelop([]byte{24}, pubChanErr)
 			err := <-pubChanErr
 			if err != nil {
@@ -105,17 +104,18 @@ func TestMicroMemoryBrokerRace(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	consumer := func(b conveyor.Broker, n int, wg *sync.WaitGroup) {
+	consumer := func(b conveyor.Broker, n int, wg *sync.WaitGroup, subscribed chan bool) {
 		defer wg.Done()
-		wg.Add(1)
 
 		sub := <-b.Subscribe("testTopic")
+
+		subscribed <- true
 
 		if sub.Error() != nil {
 			t.Fatal(sub.Error())
 		}
 
-		for i := 1; i < n; i++ {
+		for i := 0; i < n; i++ {
 			select {
 			case envelope, ok := <-sub.Receive():
 				if !ok {
@@ -125,39 +125,49 @@ func TestMicroMemoryBrokerRace(t *testing.T) {
 					t.Error("received wrong data")
 				}
 				envelope.Ack() <- nil
-			case <-time.After(time.Second):
+			case <-time.After(100 * time.Millisecond):
 				t.Error("Did not receive message")
 			}
 		}
 
 		sub.Unsubscribe()
 
-		for i := 1; i < n; i++ {
+		for i := 0; i < n; i++ {
 			select {
 			case _, ok := <-sub.Receive():
 				if ok {
 					t.Error("shouldn't receive anything")
 				}
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(100 * time.Millisecond):
 				// OK
 			}
 		}
 	}
 
-	for i := 1; i < 100; i++ {
-		mb := memory.NewBroker()
-		mb.Connect()
-		b := NewBrokerFromMicroBroker(mb)
+	mb := memory.NewBroker()
+	mb.Connect()
+	b := NewBrokerFromMicroBroker(mb)
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go consumer(b, 10, &wg)
-		go consumer(b, 20, &wg)
+	var wg sync.WaitGroup
+	subsChan := make(chan bool)
 
-		go producer(b, 10, &wg)
-		go producer(b, 30, &wg)
-		go producer(b, 30, &wg)
-		wg.Done()
-		wg.Wait()
-	}
+	wg.Add(10)
+	go consumer(b, 20, &wg, subsChan)
+	go consumer(b, 20, &wg, subsChan)
+	go consumer(b, 5, &wg, subsChan)
+	go consumer(b, 1, &wg, subsChan)
+	go consumer(b, 7, &wg, subsChan)
+
+	<-subsChan
+	<-subsChan
+	<-subsChan
+	<-subsChan
+	<-subsChan
+
+	go producer(b, 10, &wg)
+	go producer(b, 30, &wg)
+	go producer(b, 10, &wg)
+	go producer(b, 10, &wg)
+	go producer(b, 10, &wg)
+	wg.Wait()
 }
